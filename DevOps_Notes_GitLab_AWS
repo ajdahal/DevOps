@@ -411,3 +411,111 @@ deploy to production:
 
 Elastic Beanstock:
 Platform: Docker
+
+Dockerrun.aws.public.json --> Manifest file that specifies which container to run along with some properties of container.
+
+In GitLab, in order to build docker images, we need our docker daemon to be up and running and our docker client ( made from nginx image ) to be built after 
+adding necessary code
+dind -> Docker in Docker images 
+
+
+The docker image that we have crated from our gitlab would have been lost if we hadn't saved it in registry ( DOCKER HUB is a public registry ). 
+Gitlab and AWS offer private registry.
+
+Go to Packages & Registries >> Container Registry. It contains the instructions for logging in into docker registry provided by github, instructions on 
+building the package and then pushing the package to docker registry. Later, when the CI/CD job completes this section shows the docker packages that are build.
+
+We are using services to run the docker container with image of "curlimages/curl". 
+
+Set up new environment for elastic beanstalk and configure the s3 bucket name for it.
+
+Create Deploy token as - 
+Goto settings >> Repository >> Deploy Token ( Expand ) >> Name, UserName -> AWS >> Scopes (read_repository, read_registry ) >> Create Deploy token 
+You will get a deploy token now  - v1iMAznngPy8JNZ_aovJ 
+Add a new variable in GitLab with the following key-value pair: {GITLAB_DEPLOY_TOKEN, AWS:v1iMAznngPy8JNZ_aovJ}
+
+Till this point, we have created Docker image which is present in Gitlab registry, now to deploy this image in AWS BeanStalk we need to provide credentials ( Deploy token  ) 
+to AWS. 
+
+Dockerrun.aws.json
+
+{
+  "AWSEBDockerrunVersion": "1",
+  "Image": {
+    "Name": "$CI_REGISTRY_IMAGE:$APP_VERSION"                           # Docker Image specified here
+  },
+  "Authentication": {
+    "Bucket": "$AWS_S3_BUCKET",                                         # s3 bucket created by BeanStalk is defined here 
+    "Key": "auth.json"
+  },
+  "Ports": [
+    {
+      "ContainerPort": 80
+    }
+  ]
+}
+
+Dockerun.aws.public.json
+
+{
+  "AWSEBDockerrunVersion": "1",
+  "Image": {
+    "Name": "nginx"
+  },
+  "Ports": [
+    {
+      "ContainerPort": 80
+    }
+  ]
+}
+
+auth.json
+
+{
+    "auths": {
+        "$CI_REGISTRY": {
+            "auth": "$DEPLOY_TOKEN"                                     # Deploy token specified here 
+        }
+    }
+}
+
+
+A new Job is added as follows: 
+
+deploy to production:
+    image:
+        name: amazon/aws-cli:2.4.11
+        entrypoint: [""]
+    stage: deploy
+    environment: beanstalk                                                  # s3 bucket created by beanstalk is under beanstalk environment
+    script:
+        - aws --version
+        - yum install -y gettext                                             # gettext utility is needed to use envsubst command ( isn't present by default on aws image )
+        - export DEPLOY_TOKEN = $(echo $GITLAB_DEPLOY_TOKEN | td -d "\n" | base64)  # need to convert DEPLOY_TOKEN to base64 as it's expected by aws for authentication 
+        - envsubst < templates/Dockerrun.aws.json > Dockerrun.aws.json              # Registry Image and Bucket name are substituted and file Dockerrun.aws.json is copied to present folder
+        - envsubst < templates/auth.json > auth.json                                # base64 encoded DEPLOY_TOKEN is substitued and file auth.json is copied to present folder
+        - cat Dockerrun.aws.json
+        - cat auth.json
+        - aws s3 cp Dockerrun.aws.json s3://$AWS_S3_BUCKET/Dockerrun.aws.json       # Dockerrun.aws.json file is uploaded to s3 bucket 
+        - aws s3 cp auth.json s3://$AWS_S3_BUCKET/auth.json                         # auth.json file is uploaded to s3 bucket
+        # Dockerfile file is used for "docker build"   
+        - aws elasticbeanstalk create-application-version --application-name $APP_NAME --version-label $APP_VERSION --source-bundle S3Bucket=$AWS_S3_BUCKET,S3Key=Dockerrun.aws.json
+        # running the application in beanstalk application
+        - aws elasticbeanstalk update-environment --application-name $APP_NAME --version-label $APP_VERSION --environment-name $APP_ENV_NAME
+
+Now, you can see your website running in AWS_Beanstalk. 
+To test whether the application is running properly or not, you can use the following commands - 
+
+        - aws elasticbeanstalk wait environment-updated --application-name $APP_NAME --version-label $APP_VERSION --environment-name $APP_ENV_NAME  # Instead of sleep 10, we are running curl command only after necessary updates have been made in AWS
+        - curl $CI_ENVIRONMENT_URL/version.html | grep $APP_VERSION                 # using curl to check that we have desired version of Application
+
+In AWS, on IAM the user gitlab has been given Full Access to AWS Beanstalk including previous access to S3 buckets.
+
+-- Close all the AWS services -- 
+
+
+Useful Links realted to the Notes:
+https://www.youtube.com/watch?v=PGyhBwLyK2U
+https://gitlab.com/ajdahal1996
+https://docs.gitlab.com/ee/ci/variables/predefined_variables.html
+https://us-east-1.console.aws.amazon.com/elasticbeanstalk/home?region=us-east-1#/environment/dashboard?applicationName=my-website&environmentId=e-sfgmqqzjfn
