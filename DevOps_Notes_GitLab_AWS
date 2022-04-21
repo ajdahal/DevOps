@@ -409,7 +409,7 @@ deploy to production:
     environment: production
     extends: .deploy
 
-Elastic Beanstock:
+Elastic Beanstalk
 Platform: Docker
 
 Dockerrun.aws.public.json --> Manifest file that specifies which container to run along with some properties of container.
